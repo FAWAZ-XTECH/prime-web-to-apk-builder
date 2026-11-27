@@ -1,3 +1,4 @@
+
 name: Build Web APK
 
 on:
@@ -128,8 +129,16 @@ jobs:
               d.text((76, 72), 'WEB', fill=(9, 13, 28, 255))
 
           for density, size in sizes.items():
-              path = f'android/app/src/main/res/mipmap-{density}/ic_launcher.png'
-              im.resize((size, size), Image.Resampling.LANCZOS).save(path)
+              directory = f'android/app/src/main/res/mipmap-{density}'
+              os.makedirs(directory, exist_ok=True)
+
+              path = f'{directory}/ic_launcher.png'
+              im.resize(
+                  (size, size),
+                  Image.Resampling.LANCZOS
+              ).save(path)
+
+              print(f'Created launcher icon: {path}')
           PY
 
       - name: Build debug APK
@@ -144,3 +153,4 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+          
