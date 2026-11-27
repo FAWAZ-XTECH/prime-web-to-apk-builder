@@ -1,0 +1,119 @@
+name: Build Web APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      website_url:
+        description: Website URL to wrap
+        required: true
+        type: string
+      app_name:
+        description: App display name
+        required: true
+        type: string
+        default: Web App
+      package_id:
+        description: Android package ID (e.g. com.example.webapp)
+        required: true
+        type: string
+        default: com.prime.webapp
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout builder repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
+          APP_NAME: ${{ inputs.app_name }}
+          PACKAGE_ID: ${{ inputs.package_id }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          from urllib.parse import urlparse
+          u = urlparse(os.environ['WEBSITE_URL'].strip())
+          if u.scheme not in ('http','https') or not u.netloc:
+              sys.exit('website_url must be a valid http(s) URL')
+          n = os.environ['APP_NAME'].strip()
+          if not n or len(n) > 45:
+              sys.exit('app_name must be 1-45 characters')
+          p = os.environ['PACKAGE_ID'].strip()
+          if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*){1,}', p):
+              sys.exit('package_id is invalid; use e.g. com.example.webapp')
+          PY
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Prepare app name, URL and package ID
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
+          APP_NAME: ${{ inputs.app_name }}
+          PACKAGE_ID: ${{ inputs.package_id }}
+        run: |
+          python3 - <<'PY'
+          import os, xml.sax.saxutils as x
+          root='android/app/src/main/res/values'
+          os.makedirs(root, exist_ok=True)
+          with open(root+'/strings.xml','w',encoding='utf-8') as f:
+              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
+              f.write('<string name="app_name">'+x.escape(os.environ['APP_NAME'].strip())+'</string>\n')
+              f.write('<string name="website_url">'+x.escape(os.environ['WEBSITE_URL'].strip())+'</string>\n')
+              f.write('</resources>\n')
+          PY
+
+      - name: Download website favicon and generate launcher icons
+        env:
+          WEBSITE_URL: ${{ inputs.website_url }}
+        run: |
+          python3 -m pip install --user Pillow
+          python3 - <<'PY'
+          import os, urllib.request, io
+          from urllib.parse import urlparse
+          from PIL import Image, ImageDraw
+          u=urlparse(os.environ['WEBSITE_URL'])
+          host=u.hostname
+          icon_url=f'https://www.google.com/s2/favicons?domain={host}&sz=256'
+          sizes={'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}
+          try:
+              req=urllib.request.Request(icon_url,headers={'User-Agent':'Mozilla/5.0'})
+              data=urllib.request.urlopen(req,timeout=15).read()
+              im=Image.open(io.BytesIO(data)).convert('RGBA')
+              if im.width < 32 or im.height < 32: raise ValueError('favicon too small')
+          except Exception:
+              im=Image.new('RGBA',(256,256),(11,17,35,255))
+              d=ImageDraw.Draw(im); d.rounded_rectangle((24,24,232,232),radius=48,fill=(105,230,245,255))
+              d.text((76,72),'WEB',fill=(9,13,28,255))
+          for density,size in sizes.items():
+              path=f'android/app/src/main/res/mipmap-{density}/ic_launcher.png'
+              im.resize((size,size),Image.Resampling.LANCZOS).save(path)
+          PY
+
+      - name: Build debug APK
+        env:
+          PACKAGE_ID: ${{ inputs.package_id }}
+        run: gradle --no-daemon -PappId="$PACKAGE_ID" assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-apk-${{ github.run_number }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+          
