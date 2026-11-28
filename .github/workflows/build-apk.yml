@@ -61,7 +61,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3 # v4.4.2
+        uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c # v4.4.2
         with:
           gradle-version: '8.7'
 
@@ -144,7 +144,9 @@ jobs:
       - name: Build debug APK
         env:
           PACKAGE_ID: ${{ inputs.package_id }}
-        run: gradle --no-daemon -PappId="$PACKAGE_ID" assembleDebug
+        run: |
+          cd android
+          gradle --no-daemon -PappId="$PACKAGE_ID" assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
