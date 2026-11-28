@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Checkout builder repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Validate inputs
         env:
@@ -55,7 +55,7 @@ jobs:
           PY
 
       - name: Set up Java
-        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
         with:
           distribution: temurin
           java-version: '17'
@@ -67,80 +67,130 @@ jobs:
           echo "/opt/gradle/gradle-8.7/bin" >> "$GITHUB_PATH"
           gradle --version
 
-      - name: Prepare app name, URL and package ID
+      - name: Prepare Android resources and app settings
         env:
           WEBSITE_URL: ${{ inputs.website_url }}
           APP_NAME: ${{ inputs.app_name }}
           PACKAGE_ID: ${{ inputs.package_id }}
         run: |
           python3 - <<'PY'
-          import os, xml.sax.saxutils as x
+          import os
+          import shutil
+          import xml.sax.saxutils as xml
 
-          root = 'android/app/src/main/res/values'
-          os.makedirs(root, exist_ok=True)
+          res = 'android/app/src/main/res'
 
-          with open(root + '/strings.xml', 'w', encoding='utf-8') as f:
-              f.write('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n')
-              f.write('<string name="app_name">' + x.escape(os.environ['APP_NAME'].strip()) + '</string>\n')
-              f.write('<string name="website_url">' + x.escape(os.environ['WEBSITE_URL'].strip()) + '</string>\n')
-              f.write('</resources>\n')
+          # Remove previous empty or malformed generated resource folders.
+          for name in os.listdir(res):
+              if name.startswith('mipmap-') or name == 'values':
+                  path = os.path.join(res, name)
+                  if os.path.isdir(path):
+                      shutil.rmtree(path)
+                  else:
+                      os.remove(path)
+
+          # Recreate required resource folders.
+          os.makedirs(os.path.join(res, 'values'), exist_ok=True)
+
+          app_name = xml.escape(os.environ['APP_NAME'].strip())
+          website_url = xml.escape(os.environ['WEBSITE_URL'].strip())
+
+          strings = f'''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">{app_name}</string>
+              <string name="website_url">{website_url}</string>
+          </resources>
+          '''
+
+          with open(os.path.join(res, 'values', 'strings.xml'), 'w', encoding='utf-8') as f:
+              f.write(strings)
+
+          print('Android resource folders cleaned and prepared.')
+          print('App name and website URL configured.')
           PY
 
-      - name: Download website favicon and generate launcher icons
+      - name: Download favicon and generate launcher icons
         env:
           WEBSITE_URL: ${{ inputs.website_url }}
         run: |
           python3 -m pip install --user Pillow
 
           python3 - <<'PY'
-          import os, urllib.request, io
+          import os
+          import io
+          import urllib.request
           from urllib.parse import urlparse
           from PIL import Image, ImageDraw
 
-          u = urlparse(os.environ['WEBSITE_URL'])
-          host = u.hostname
+          website = os.environ['WEBSITE_URL'].strip()
+          host = urlparse(website).hostname
+
           icon_url = f'https://www.google.com/s2/favicons?domain={host}&sz=256'
 
           sizes = {
-              'mdpi': 48,
-              'hdpi': 72,
-              'xhdpi': 96,
-              'xxhdpi': 144,
-              'xxxhdpi': 192
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192
           }
 
           try:
-              req = urllib.request.Request(
+              request = urllib.request.Request(
                   icon_url,
                   headers={'User-Agent': 'Mozilla/5.0'}
               )
-              data = urllib.request.urlopen(req, timeout=15).read()
-              im = Image.open(io.BytesIO(data)).convert('RGBA')
 
-              if im.width < 32 or im.height < 32:
-                  raise ValueError('favicon too small')
+              data = urllib.request.urlopen(request, timeout=20).read()
+              icon = Image.open(io.BytesIO(data)).convert('RGBA')
 
-          except Exception:
-              im = Image.new('RGBA', (256, 256), (11, 17, 35, 255))
-              d = ImageDraw.Draw(im)
-              d.rounded_rectangle(
-                  (24, 24, 232, 232),
+              if icon.width < 32 or icon.height < 32:
+                  raise ValueError('Icon image is too small')
+
+              print('Website favicon downloaded successfully.')
+
+          except Exception as error:
+              print('Favicon download failed:', error)
+              print('Creating fallback icon.')
+
+              icon = Image.new(
+                  'RGBA',
+                  (256, 256),
+                  (11, 17, 35, 255)
+              )
+
+              draw = ImageDraw.Draw(icon)
+
+              draw.rounded_rectangle(
+                  (20, 20, 236, 236),
                   radius=48,
                   fill=(105, 230, 245, 255)
               )
-              d.text((76, 72), 'WEB', fill=(9, 13, 28, 255))
 
-          for density, size in sizes.items():
-              directory = f'android/app/src/main/res/mipmap-{density}'
+              draw.text(
+                  (82, 105),
+                  'WEB',
+                  fill=(9, 13, 28, 255)
+              )
+
+          res = 'android/app/src/main/res'
+
+          for folder, size in sizes.items():
+              directory = os.path.join(res, folder)
               os.makedirs(directory, exist_ok=True)
 
-              path = f'{directory}/ic_launcher.png'
-              im.resize(
+              output = os.path.join(directory, 'ic_launcher.png')
+
+              resized = icon.resize(
                   (size, size),
                   Image.Resampling.LANCZOS
-              ).save(path)
+              )
 
-              print(f'Created launcher icon: {path}')
+              resized.save(output, format='PNG')
+
+              print(f'Generated {output} ({size}x{size})')
+
+          print('All launcher icons generated.')
           PY
 
       - name: Build debug APK
@@ -151,7 +201,7 @@ jobs:
           gradle --no-daemon -PappId="$PACKAGE_ID" assembleDebug
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: web-apk-${{ github.run_number }}
           path: android/app/build/outputs/apk/debug/app-debug.apk
